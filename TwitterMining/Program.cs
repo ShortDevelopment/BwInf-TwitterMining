@@ -15,11 +15,21 @@ namespace TwitterMining
         static HashSet<Edge> edges;
         static void Main(string[] args)
         {
-            nodes = new(ExtractNodes(save: true));
-            edges = new(ExtractEdges(save: true));
-            var trimmedNodes = TrimNodes(save: true);
+            nodes = new(ExtractNodes());
+            edges = new(ExtractEdges());
+            {
+                TsvSerializer<Edge> serializer = new();
+                using (var stream = File.Create("edges.csv"))
+                    serializer.Serialize(edges, stream);
+            }
+            var trimmedNodes = TrimNodes();
+            {
+                TsvSerializer<Node> serializer = new();
+                using (var stream = File.Create("nodes.csv"))
+                    serializer.Serialize(trimmedNodes, stream);
+            }
             Debugger.Break();
- 
+
             //JArray tweets = JsonConvert.DeserializeObject<JArray>(File.ReadAllText("data/cc_tweets.json"));
             //var dictionary = tweets.GroupBy((x) => x["lang"].ToString()).ToDictionary((x) => x.Key, (x) => x.ToArray());
             //foreach (var item in dictionary)
@@ -35,7 +45,9 @@ namespace TwitterMining
             IEnumerable<Node> nodes = relevantUsers.Select((x) => new Node(
                 long.Parse(x["id"]!.ToString()),
                 x["name"]!.ToString(),
-                x["location"]?.ToString()
+                x["location"]?.ToString(),
+                x["created_at"]!.ToString(),
+                (bool)x["verified"]!
             ));
             if (save)
                 File.WriteAllText("nodes.json", JsonConvert.SerializeObject(nodes));
@@ -48,31 +60,33 @@ namespace TwitterMining
         private static ConcurrentBag<Edge> ExtractEdges(bool save = false)
         {
             using (var stream = File.OpenRead("data/cc_follows.json"))
-            using (StreamReader streamReader = new StreamReader(stream))
-            using (JsonReader reader = new JsonTextReader(streamReader))
+            using (StreamReader streamReader = new(stream))
+            using (JsonTextReader reader = new(streamReader))
             {
                 JsonSerializer serializer = new JsonSerializer();
                 ConcurrentBag<Edge> edges = new();
-                var follows = serializer.Deserialize<FollowData[]>(reader)!; // JsonConvert.DeserializeObject<JArray>(stream)!;
+                var follows = serializer.Deserialize<FollowData[]>(reader)!;
                 Parallel.ForEach(follows, (x) =>
                 {
                     Node? currentNode = GetNodeById(x.id);
-                    if (currentNode != null)
+                    if (currentNode != default)
                     {
                         var following = x.following;
-                        Parallel.ForEach(following, (id) =>
+                        // Parallel.ForEach(following, (id) =>
+                        foreach (var id in following)
                         {
                             Node? connectedNode = GetNodeById(long.Parse(id.ToString()));
                             if (connectedNode != null)
                                 edges.Add(new(currentNode.id, connectedNode.id));
-                        });
+                        };
                         var followed_by = x.followed_by;
-                        Parallel.ForEach(followed_by, (id) =>
+                        // Parallel.ForEach(followed_by, (id) =>
+                        foreach (var id in followed_by)
                         {
                             Node? connectedNode = GetNodeById(long.Parse(id.ToString()));
                             if (connectedNode != null)
                                 edges.Add(new(currentNode.id, connectedNode.id));
-                        });
+                        };
                     }
                 });
                 if (save)
@@ -85,14 +99,12 @@ namespace TwitterMining
         {
             HashSet<Node> nodesWithEdge = new();
             HashSet<long> idsWithEdge = new();
-            foreach(var edge in edges)
+            foreach (var edge in edges)
             {
                 if (!idsWithEdge.Contains(edge.startId))
                     idsWithEdge.Add(edge.startId);
-                if (!idsWithEdge.Contains(edge.endId))
-                    idsWithEdge.Add(edge.endId);
             }
-            foreach(var node in nodes)
+            foreach (var node in nodes)
             {
                 if (idsWithEdge.Contains(node.id))
                     nodesWithEdge.Add(node);
@@ -102,7 +114,7 @@ namespace TwitterMining
             return nodesWithEdge;
         }
 
-        record class Node(long id, string name, string? ort);
+        record class Node(long id, string name, string? ort, string created_at, bool verified);
         record class Edge(long startId, long endId);
 
         record class FollowData(long id, long[] following, long[] followed_by);
